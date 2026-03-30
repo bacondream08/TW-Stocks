@@ -54,13 +54,11 @@ def check_continuous_growth(stock_id):
         latest_data = df.groupby('date').tail(1).sort_values('date', ascending=False)
         
         if len(latest_data) >= 4:
-            p = latest_data['percent'].tolist()[:4] # [本週, 前1週, 前2週, 前3週]
-            
-            # 3. 寬鬆邏輯：只要本週比三週前高，且中間沒有大幅減少
-            # 判斷：本週 >= 前1週 且 前1週 >= 前2週 且 前2週 >= 前3週，且 本週 > 三週前
-          # 改成這樣試試看 (只要趨勢向上就抓出來)
-          if p[0] > p[3]: 
-             return [round(x, 2) for x in p]
+            p = latest_data['percent'].tolist()[:4]
+            # 注意：下面這一行開頭的空格數量，必須跟上面的 p = ... 一模一樣
+            if p[0] > p[3]: 
+                return [round(x, 2) for x in p]
+
 
         return None
     except Exception:
