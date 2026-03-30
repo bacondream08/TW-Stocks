@@ -39,24 +39,33 @@ with st.sidebar:
 
 # --- 3. 核心邏輯函數 ---
 def check_continuous_growth(stock_id):
-    """檢查該股票是否符合連續三週大戶增加"""
+    """強化版：自動判斷級距名稱並檢查連續增加"""
     try:
-        # 抓取過去 40 天數據
+        # 1. 抓取過去 45 天數據 (確保涵蓋 5 週)
         df = api.taiwan_stock_holding_shares_per(
             stock_id=stock_id,
-            start_date=(datetime.date.today() - datetime.timedelta(days=40)).strftime('%Y-%m-%d')
+            start_date=(datetime.date.today() - datetime.timedelta(days=45)).strftime('%Y-%m-%d')
         )
-        # 篩選 1000張以上 (1,000,001股以上)
-        big_df = df[df['holding_range'] == '1,000,001以上'].sort_values('date', ascending=False)
+        
+        # 2. 自動尋找「1000張以上」的級距名稱 (相容性檢查)
+        # 有些是 '1,000,001以上'，有些是 '1000'
+        possible_ranges = ['1,000,001以上', '1000']
+        big_df = df[df['holding_range'].isin(possible_ranges)].sort_values('date', ascending=False)
+        
+        # 3. 排除重複日期並取最新四週
+        big_df = big_df.drop_duplicates(subset=['date'])
         
         if len(big_df) >= 4:
             p = big_df['percent'].tolist()
-            # 判斷連續三週增長
-            if p[0] > p[1] and p[1] > p[2] and p[2] > p[3]:
-                return [round(x, 2) for x in p[:4]]
+            # 檢查是否連續三週大於或等於 (增加一點容錯，防止剛好持平)
+            if p[0] >= p[1] and p[1] >= p[2] and p[2] >= p[3]:
+                # 確保至少有一週是真的「增加」
+                if p[0] > p[3]:
+                    return [round(x, 2) for x in p[:4]]
         return None
     except:
         return None
+
 
 # --- 4. 主畫面執行 ---
 st.title("📈 台股 1000張大戶「連三增」監控站")
