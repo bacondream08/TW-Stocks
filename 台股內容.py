@@ -40,7 +40,7 @@ with st.sidebar:
 # --- 3. 核心邏輯函數 ---
 def check_continuous_growth(stock_id):
     try:
-        # 1. 抓取最近 50 天資料 (確保涵蓋 5 週五)
+        # 1. 抓取過去 50 天數據
         df = api.taiwan_stock_holding_shares_per(
             stock_id=stock_id,
             start_date=(datetime.date.today() - datetime.timedelta(days=50)).strftime('%Y-%m-%d')
@@ -49,23 +49,19 @@ def check_continuous_growth(stock_id):
         if df.empty:
             return None
 
-        # 2. 找出該股票「最大級距」的資料 (通常就是 1000張以上)
-        # 不管它叫 '1000' 還是 '1,000,001以上'，直接抓數值最大的級距
-        max_level = df['holding_range'].unique()[-1] 
-        big_df = df[df['holding_range'] == max_level].sort_values('date', ascending=False)
+        # 2. 依照日期分組，並抓取每個日期「最後一個級距」(即最大級距)
+        # 不管它叫什麼名字，最後一級通常就是大戶
+        latest_data = df.groupby('date').tail(1).sort_values('date', ascending=False)
         
-        # 3. 確保日期不重複
-        big_df = big_df.drop_duplicates(subset=['date'])
-        
-        if len(big_df) >= 4:
-            p = big_df['percent'].tolist()[:4] # [本週, 前1週, 前2週, 前3週]
+        if len(latest_data) >= 4:
+            p = latest_data['percent'].tolist()[:4] # [本週, 前1週, 前2週, 前3週]
             
-            # 4. 寬鬆判斷：只要「總趨勢向上」且「本週大於三週前」
-            # 這裡改成：本週 >= 前1週 >= 前2週 >= 前3週，且 本週 > 三週前
+            # 3. 寬鬆邏輯：只要本週比三週前高，且中間沒有大幅減少
+            # 判斷：本週 >= 前1週 且 前1週 >= 前2週 且 前2週 >= 前3週，且 本週 > 三週前
             if (p[0] >= p[1] and p[1] >= p[2] and p[2] >= p[3]) and (p[0] > p[3]):
                 return [round(x, 2) for x in p]
         return None
-    except Exception as e:
+    except Exception:
         return None
 
 # --- 4. 主畫面執行 ---
