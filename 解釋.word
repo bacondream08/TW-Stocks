@@ -1,0 +1,137 @@
+import streamlit as st
+import pandas as pd
+from FinMind.data import DataLoader
+import datetime
+import time
+import plotly.express as px
+
+# ==========================================
+# 1. 系統初始化與金鑰登入
+# ==========================================
+# 這是你的通行證，讓程式可以合法進入 FinMind 資料庫抓取台股數據
+MY_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJkYXRlIjoiMjAyNi0wMy0yNiAxOTowNTowMyIsInVzZXJfaWQiOiJiYWNvbmRyZWFtIiwiZW1haWwiOiJiYWNvbmRyZWFtMDhAZ21haWwuY29tIiwiaXAiOiIxMTQuNDcuNzcuMTY0In0.URFp0XQ2HdtmZXsVObjK3m1NXw3s44ZVRrI8_hPa1Qs"
+
+# 啟動資料下載器並登入
+api = DataLoader()
+api.login_by_token(api_token=MY_TOKEN)
+
+# 設定網頁標題與排版方式
+st.set_page_config(page_title="台股大戶籌碼監控站", layout="wide")
+
+# ==========================================
+# 2. 核心邏輯：如何判斷「大戶連三增」
+# ==========================================
+def check_continuous_growth(stock_id):
+    """
+    這是一個自動篩選器：
+    輸入：股票代號
+    輸出：如果符合「連續三週大戶增加」就回傳數據，不符合就丟掉
+    """
+    try:
+        # A. 向資料庫請求最近 50 天的「股權分散表」(集保資料)
+        df = api.taiwan_stock_holding_shares_per(
+            stock_id=stock_id,
+            start_date=(datetime.date.today() - datetime.timedelta(days=50)).strftime('%Y-%m-%d')
+        )
+        
+        if df.empty:
+            return None
+
+        # B. 自動定位「1000張以上」的級距
+        # 因為每檔股票級距名稱可能不同，我們直接抓該表最後一個級距(通常就是最大級距)
+        latest_data = df.groupby('date').tail(1).sort_values('date', ascending=False)
+        
+        # C. 確保我們有至少 4 週的資料可以進行比對
+        if len(latest_data) >= 4:
+            # 取得最近四週的持股比例 [%1(本週), %2(上週), %3(兩週前), %4(三週前)]
+            p = latest_data['percent'].tolist()[:4]
+            
+            # D. 關鍵篩選邏輯：
+            # 只要「本週」的比例大於「三週前」，就代表這段時間大戶在加碼
+            if p[0] > p[3]: 
+                return [round(x, 2) for x in p]
+        return None
+    except Exception:
+        # 如果抓取過程出錯(例如網路斷線)，就跳過該股票
+        return None
+
+# ==========================================
+# 3. 網頁介面設計 (使用者看到的部分)
+# ==========================================
+st.title("📈 台股 1000張大戶「連三增」監控站")
+st.info("本系統會自動過濾全台股，找出大戶正在默默吃貨的標的。")
+
+# 側邊欄：讓使用者調整參數
+with st.sidebar:
+    st.header("⚙️ 篩選設定")
+    # 市場選擇清單
+    market_display = st.multiselect(
+        "選擇要掃描的市場", 
+        ["上市", "上櫃", "興櫃"], 
+        default=["上市", "上櫃", "興櫃"]
+    )
+    # 將中文對應回程式看的懂的代碼 (TSE=上市, OTC=上櫃)
+    market_map = {"上市": "TSE", "上櫃": "OTC", "興櫃": "興櫃"}
+    selected_markets = [market_map[m] for m in market_display]
+    
+    # 掃描股票的數量上限，避免跑太久
+    scan_count = st.number_input("掃描股票數量 (全市場約1700+)", min_value=10, max_value=2000, value=200)
+
+# ==========================================
+# 4. 執行流程控制
+# ==========================================
+if st.button("🚀 開始全市場掃描"):
+    with st.spinner("正在連線雲端資料庫並進行數據比對..."):
+        # 1. 取得全台灣所有的股票清單
+        stock_info = api.taiwan_stock_info()
+        # 2. 根據使用者的設定，過濾出要掃描的範圍
+        filtered_list = stock_info[stock_info['type'].isin(selected_markets)].head(scan_count)
+        
+        results = []
+        progress_bar = st.progress(0) # 網頁上的進度條
+        status_text = st.empty()     # 顯示目前正在檢查哪一隻股票
+        
+        # 3. 逐一檢查每一檔股票
+        for i, (idx, row) in enumerate(filtered_list.iterrows()):
+            sid, sname, stype = row['stock_id'], row['stock_name'], row['type']
+            
+            # 更新網頁進度顯示
+            progress_bar.progress((i + 1) / len(filtered_list))
+            status_text.text(f"🔍 檢查中: {sid} {sname} ({stype})")
+            
+            # 執行上面定義的「篩選邏輯」
+            data = check_continuous_growth(sid)
+            if data:
+                # 如果符合條件，就存入結果清單
+                results.append({
+                    "代碼": sid, "名稱": sname, "市場": stype,
+                    "本週(%)": data[0], "前1週(%)": data[1], 
+                    "前2週(%)": data[2], "前3週(%)": data[3],
+                    "累計增幅": round(data[0] - data[3], 2)
+                })
+            # 為了避免 API 抓取太快被資料庫封鎖，中間稍微停頓 0.05 秒
+            time.sleep(0.05)
+
+        status_text.empty() # 掃描完後清除狀態文字
+        
+        # ==========================================
+        # 5. 結果呈現與圖表
+        # ==========================================
+        if results:
+            st.success(f"✅ 掃描完成！共找到 {len(results)} 檔大戶吃貨股")
+            res_df = pd.DataFrame(results)
+            
+            # A. 畫出精美的柱狀圖，一眼看出誰加碼最多
+            st.subheader("📊 大戶增幅排行榜 (近三週)")
+            fig = px.bar(res_df, x="名稱", y="累計增幅", color="累計增幅", text="累計增幅", color_continuous_scale="Reds")
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # B. 顯示詳細數據表格
+            st.subheader("📋 詳細籌碼數據表")
+            st.dataframe(res_df, use_container_width=True)
+            
+            # C. 提供一鍵下載，方便存入 Excel
+            csv = res_df.to_csv(index=False).encode('utf-8-sig')
+            st.download_button("📥 下載篩選報告 (CSV)", data=csv, file_name=f"大戶監控報告_{datetime.date.today()}.csv")
+        else:
+            st.warning("⚠️ 目前掃描範圍內沒有符合條件的股票，建議擴大掃描數量。")
